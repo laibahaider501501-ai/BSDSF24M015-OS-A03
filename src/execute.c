@@ -7,6 +7,22 @@
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
+#include <errno.h>
+
+/* Convert a wait status into the command's exit code. */
+
+static int get_exit_code(int status)
+{
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+
+    if (WIFSIGNALED(status))
+        return 128 + WTERMSIG(status);
+
+    return 1;
+}
+
+/* Execute one command, including input/output redirection. */
 
 static void execute_command(char **args)
 {
@@ -22,8 +38,6 @@ static void execute_command(char **args)
     }
 
     int count = 0;
-
-    /* Remove redirection operators and their filenames. */
 
     for (int i = 0; args[i] != NULL; i++)
     {
@@ -71,7 +85,7 @@ static void execute_command(char **args)
         {
             if (count >= 1023)
             {
-                fprintf(stderr, "Too many command arguments\n");
+                fprintf(stderr, "Too many arguments\n");
                 exit(EXIT_FAILURE);
             }
 
@@ -110,14 +124,17 @@ static void execute_command(char **args)
     exit(EXIT_FAILURE);
 }
 
-static void execute_pipeline(char **args)
+/*
+ * Execute commands connected by pipes.
+ * Return the exit status of the final command in the pipeline.
+ */
+
+static int execute_pipeline(char **args)
 {
     char **commands[100];
     int command_count = 1;
 
     commands[0] = args;
-
-    /* Split the arguments at every pipe operator. */
 
     for (int i = 0; args[i] != NULL; i++)
     {
@@ -125,10 +142,10 @@ static void execute_pipeline(char **args)
         {
             if (command_count >= 100 ||
                 args[i + 1] == NULL ||
-                args[i - 1] == NULL)
+                i == 0)
             {
                 fprintf(stderr, "Invalid pipe command\n");
-                return;
+                return 1;
             }
 
             args[i] = NULL;
@@ -144,7 +161,14 @@ static void execute_pipeline(char **args)
         if (pipe(pipes[i]) < 0)
         {
             perror("pipe");
-            return;
+
+            for (int j = 0; j < i; j++)
+            {
+                close(pipes[j][0]);
+                close(pipes[j][1]);
+            }
+
+            return 1;
         }
     }
 
@@ -192,24 +216,44 @@ static void execute_pipeline(char **args)
         started++;
     }
 
-    /* Close all pipe descriptors in the parent. */
-
     for (int i = 0; i < command_count - 1; i++)
     {
         close(pipes[i][0]);
         close(pipes[i][1]);
     }
 
-    /* Wait for the processes that were successfully started. */
+    int last_status = 1;
 
     for (int i = 0; i < started; i++)
-        waitpid(pids[i], NULL, 0);
+    {
+        int status;
+        pid_t result;
+
+        do
+        {
+            result = waitpid(pids[i], &status, 0);
+        }
+        while (result < 0 && errno == EINTR);
+
+        if (result < 0)
+        {
+            perror("waitpid");
+            continue;
+        }
+
+        if (i == command_count - 1)
+            last_status = get_exit_code(status);
+    }
+
+    return last_status;
 }
 
-void execute(char **arglist, int background)
+/* Main execution function. */
+
+int execute(char **arglist, int background)
 {
     if (arglist == NULL || arglist[0] == NULL)
-        return;
+        return 0;
 
     if (background)
     {
@@ -218,18 +262,20 @@ void execute(char **arglist, int background)
         if (pid < 0)
         {
             perror("fork");
-            return;
+            return 1;
         }
 
         if (pid == 0)
         {
-            execute_pipeline(arglist);
-            exit(EXIT_SUCCESS);
+            int status = execute_pipeline(arglist);
+            exit(status);
         }
 
         add_job(pid, arglist[0]);
-        return;
+
+        /* The parent does not wait for a background command. */
+        return 0;
     }
 
-    execute_pipeline(arglist);
+    return execute_pipeline(arglist);
 }

@@ -29,6 +29,6 @@ void reap_background_jobs(void);
 void print_jobs(void);
 
 /* Command execution */
-void execute(char **arglist, int background);
+int execute(char **arglist, int background);
 
 #endif

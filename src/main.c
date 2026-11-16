@@ -9,8 +9,9 @@
 #include <readline/history.h>
 
 #define PROMPT "myshell> "
+#define IF_PROMPT "if> "
 
-/* Remove leading and trailing whitespace. */
+/* Remove leading and trailing spaces. */
 
 static char *trim(char *text)
 {
@@ -26,10 +27,23 @@ static char *trim(char *text)
     return text;
 }
 
-/*
- * Detect an ampersand at the end of a command.
- * The ampersand is removed before tokenization.
- */
+/* Check whether a line is exactly a keyword. */
+
+static int is_keyword(const char *line, const char *keyword)
+{
+    char *copy = strdup(line);
+
+    if (copy == NULL)
+        return 0;
+
+    char *clean = trim(copy);
+    int result = strcmp(clean, keyword) == 0;
+
+    free(copy);
+    return result;
+}
+
+/* Detect an ampersand at the end of a command. */
 
 static int detect_background(char *command)
 {
@@ -62,49 +76,285 @@ static int detect_background(char *command)
     return 0;
 }
 
-/* Execute one command from the input line. */
+/* Execute one individual command. */
 
-static void process_command(char *command)
+static int process_command(char *command)
 {
     command = trim(command);
 
     if (*command == '\0')
-        return;
+        return 0;
 
     int background = detect_background(command);
 
     command = trim(command);
 
     if (*command == '\0')
-        return;
+        return 0;
 
     char **arglist = tokenize(command);
 
     if (arglist == NULL)
     {
         fprintf(stderr, "Unable to parse command\n");
-        return;
+        return 1;
     }
 
     if (arglist[0] == NULL)
     {
         free(arglist);
-        return;
+        return 0;
     }
 
-    /*
-     * Built-ins run inside the shell process.
-     * External commands use execute().
-     */
+    int status = 0;
 
-    if (!handle_builtin(arglist))
-        execute(arglist, background);
+    if (handle_builtin(arglist))
+    {
+        /*
+         * Existing built-ins are handled by the shell.
+         * Their successful execution is treated as status 0.
+         */
+        status = 0;
+    }
+    else
+    {
+        status = execute(arglist, background);
+    }
 
     for (int i = 0; arglist[i] != NULL; i++)
         free(arglist[i]);
 
     free(arglist);
+
+    return status;
 }
+
+/* Execute a line containing one or more ; separated commands. */
+
+static int process_line(char *line)
+{
+    int count = 0;
+
+    char **commands = split_commands(line, &count);
+
+    if (commands == NULL)
+    {
+        fprintf(stderr, "Unable to split commands\n");
+        return 1;
+    }
+
+    int status = 0;
+
+    for (int i = 0; i < count; i++)
+        status = process_command(commands[i]);
+
+    free_commands(commands, count);
+
+    return status;
+}
+
+/* Add a line to a dynamically growing block of commands. */
+
+static int add_block_line(char ***block, int *count,
+                          int *capacity, const char *line)
+{
+    if (*count == *capacity)
+    {
+        int new_capacity = (*capacity == 0) ? 4 : (*capacity * 2);
+
+        char **temp = realloc(
+            *block,
+            new_capacity * sizeof(char *)
+        );
+
+        if (temp == NULL)
+            return 0;
+
+        *block = temp;
+        *capacity = new_capacity;
+    }
+
+    (*block)[*count] = strdup(line);
+
+    if ((*block)[*count] == NULL)
+        return 0;
+
+    (*count)++;
+
+    return 1;
+}
+
+/* Free a block of stored command lines. */
+
+static void free_block(char **block, int count)
+{
+    for (int i = 0; i < count; i++)
+        free(block[i]);
+
+    free(block);
+}
+
+/*
+ * Read and execute a multi-line if-then-else-fi block.
+ *
+ * Example:
+ *
+ * if true
+ * then
+ *     echo Success
+ * else
+ *     echo Failure
+ * fi
+ */
+
+static void process_if_statement(char *first_line)
+{
+    char **then_block = NULL;
+    char **else_block = NULL;
+
+    int then_count = 0;
+    int else_count = 0;
+
+    int then_capacity = 0;
+    int else_capacity = 0;
+
+    int in_then = 0;
+    int in_else = 0;
+    int found_fi = 0;
+
+    char *condition = trim(first_line + 2);
+
+    if (*condition == '\0')
+    {
+        fprintf(stderr, "Syntax error: missing if condition\n");
+        return;
+    }
+
+    /*
+     * Read the remaining lines until fi is found.
+     */
+
+    while (1)
+    {
+        char *line = readline(IF_PROMPT);
+
+        if (line == NULL)
+        {
+            fprintf(stderr, "\nSyntax error: missing fi\n");
+            break;
+        }
+
+        add_history(line);
+
+        char *clean = trim(line);
+
+        if (is_keyword(clean, "then"))
+        {
+            if (in_then || in_else)
+            {
+                fprintf(stderr, "Syntax error: unexpected then\n");
+                free(line);
+                break;
+            }
+
+            in_then = 1;
+            free(line);
+            continue;
+        }
+
+        if (is_keyword(clean, "else"))
+        {
+            if (!in_then || in_else)
+            {
+                fprintf(stderr, "Syntax error: unexpected else\n");
+                free(line);
+                break;
+            }
+
+            in_else = 1;
+            free(line);
+            continue;
+        }
+
+        if (is_keyword(clean, "fi"))
+        {
+            found_fi = 1;
+            free(line);
+            break;
+        }
+
+        if (!in_then)
+        {
+            fprintf(stderr, "Syntax error: expected then\n");
+            free(line);
+            break;
+        }
+
+        if (in_else)
+        {
+            if (!add_block_line(&else_block,
+                                &else_count,
+                                &else_capacity,
+                                clean))
+            {
+                fprintf(stderr, "Memory allocation error\n");
+                free(line);
+                break;
+            }
+        }
+        else
+        {
+            if (!add_block_line(&then_block,
+                                &then_count,
+                                &then_capacity,
+                                clean))
+            {
+                fprintf(stderr, "Memory allocation error\n");
+                free(line);
+                break;
+            }
+        }
+
+        free(line);
+    }
+
+    if (!found_fi || !in_then)
+    {
+        fprintf(stderr, "Invalid if statement\n");
+        free_block(then_block, then_count);
+        free_block(else_block, else_count);
+        return;
+    }
+
+    /*
+     * Execute the condition.
+     *
+     * Exit status 0 means success.
+     * Non-zero means failure.
+     */
+
+    int condition_status = process_line(condition);
+
+    if (condition_status == 0)
+    {
+        printf("Condition successful. Executing then block.\n");
+
+        for (int i = 0; i < then_count; i++)
+            process_line(then_block[i]);
+    }
+    else
+    {
+        printf("Condition failed. Executing else block.\n");
+
+        for (int i = 0; i < else_count; i++)
+            process_line(else_block[i]);
+    }
+
+    free_block(then_block, then_count);
+    free_block(else_block, else_count);
+}
+
+/* Main shell loop. */
 
 int main(void)
 {
@@ -112,10 +362,7 @@ int main(void)
 
     while (1)
     {
-        /*
-         * Reap completed background processes before
-         * displaying the next prompt.
-         */
+        /* Reap completed background jobs. */
 
         reap_background_jobs();
 
@@ -133,7 +380,7 @@ int main(void)
             continue;
         }
 
-        /* Handle history re-execution: !n */
+        /* Handle !n history execution. */
 
         if (input[0] == '!' &&
             isdigit((unsigned char)input[1]))
@@ -167,27 +414,26 @@ int main(void)
         add_history(input);
         add_to_history(input);
 
+        char *clean = trim(input);
+
         /*
-         * Split the input into commands separated by ;
-         * Commands are then executed one by one.
+         * If the command begins with if,
+         * read and process a multi-line block.
          */
 
-        int count = 0;
-        char **commands = split_commands(input, &count);
-
-        if (commands == NULL)
+        if (strncmp(clean, "if ", 3) == 0)
         {
-            fprintf(stderr, "Unable to split commands\n");
-            free(input);
-            continue;
+            process_if_statement(clean);
+        }
+        else if (strcmp(clean, "if") == 0)
+        {
+            process_if_statement(clean);
+        }
+        else
+        {
+            process_line(clean);
         }
 
-        for (int i = 0; i < count; i++)
-        {
-            process_command(commands[i]);
-        }
-
-        free_commands(commands, count);
         free(input);
     }
 
