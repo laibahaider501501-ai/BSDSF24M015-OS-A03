@@ -1,6 +1,9 @@
+
 CC = gcc
 
 CFLAGS = -Wall -Wextra -g -Iinclude
+
+LDLIBS = -lreadline
 
 SRC = src/main.c src/shell.c src/execute.c
 
@@ -10,14 +13,12 @@ TARGET = bin/myshell
 
 all: $(TARGET)
 
-$(TARGET): $(OBJ)
-	$(CC) $(CFLAGS) -o $(TARGET) $(OBJ)
+$(TARGET): $(OBJ) | bin
+	$(CC) $(CFLAGS) -o $(TARGET) $(OBJ) $(LDLIBS)
 
 obj/%.o: src/%.c include/shell.h
 	mkdir -p obj
 	$(CC) $(CFLAGS) -c $< -o $@
-
-$(TARGET): | bin
 
 bin:
 	mkdir -p bin
