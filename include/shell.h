@@ -15,6 +15,7 @@
 #define MAX_LEN 512
 #define MAXARGS 10
 #define ARGLEN 30
+#define HISTORY_SIZE 20
 #define PROMPT "FCIT> "
 
 // Function prototypes
@@ -24,5 +25,10 @@ int execute(char** arglist);
 
 // Built-in command handler
 int handle_builtin(char** arglist);
+
+// History functions
+void add_to_history(const char* command);
+void print_history(void);
+const char* get_history_command(int number);
 
 #endif

@@ -1,8 +1,72 @@
 
 #include "shell.h"
 
+// Array to store command history
+static char* history[HISTORY_SIZE];
+static int history_count = 0;
+
+
+// Add a command to history
+void add_to_history(const char* command) {
+
+    if (command == NULL || command[0] == '\0') {
+        return;
+    }
+
+    // Make a separate copy of the command
+    char* copy = strdup(command);
+
+    if (copy == NULL) {
+        perror("strdup failed");
+        return;
+    }
+
+    // If history is full, remove the oldest command
+    if (history_count == HISTORY_SIZE) {
+
+        free(history[0]);
+
+        for (int i = 0; i < HISTORY_SIZE - 1; i++) {
+            history[i] = history[i + 1];
+        }
+
+        history_count--;
+    }
+
+    // Store the new command
+    history[history_count] = copy;
+    history_count++;
+}
+
+
+// Display all stored commands
+void print_history(void) {
+
+    printf("\nCommand History:\n");
+    printf("----------------\n");
+
+    for (int i = 0; i < history_count; i++) {
+        printf("%d  %s\n", i + 1, history[i]);
+    }
+
+    printf("\n");
+}
+
+
+// Retrieve a command using its history number
+const char* get_history_command(int number) {
+
+    if (number < 1 || number > history_count) {
+        return NULL;
+    }
+
+    return history[number - 1];
+}
+
+
 // Read a command from the user
 char* read_cmd(char* prompt, FILE* fp) {
+
     printf("%s", prompt);
 
     char* cmdline = (char*) malloc(sizeof(char) * MAX_LEN);
@@ -15,6 +79,7 @@ char* read_cmd(char* prompt, FILE* fp) {
     int c, pos = 0;
 
     while ((c = getc(fp)) != EOF) {
+
         if (c == '\n') {
             break;
         }
@@ -38,7 +103,8 @@ char* read_cmd(char* prompt, FILE* fp) {
 // Convert the command into arguments
 char** tokenize(char* cmdline) {
 
-    if (cmdline == NULL || cmdline[0] == '\0' || cmdline[0] == '\n') {
+    if (cmdline == NULL || cmdline[0] == '\0' ||
+        cmdline[0] == '\n') {
         return NULL;
     }
 
@@ -50,10 +116,17 @@ char** tokenize(char* cmdline) {
     }
 
     for (int i = 0; i < MAXARGS + 1; i++) {
+
         arglist[i] = (char*) malloc(sizeof(char) * ARGLEN);
 
         if (arglist[i] == NULL) {
             perror("malloc failed");
+
+            for (int j = 0; j < i; j++) {
+                free(arglist[j]);
+            }
+
+            free(arglist);
             exit(1);
         }
 
@@ -84,6 +157,7 @@ char** tokenize(char* cmdline) {
         }
 
         if (len >= ARGLEN) {
+
             printf("Error: Argument is too long.\n");
 
             for (int i = 0; i < MAXARGS + 1; i++) {
@@ -101,6 +175,7 @@ char** tokenize(char* cmdline) {
     }
 
     if (argnum == 0) {
+
         for (int i = 0; i < MAXARGS + 1; i++) {
             free(arglist[i]);
         }
@@ -118,13 +193,13 @@ char** tokenize(char* cmdline) {
 // Handle built-in commands
 int handle_builtin(char** arglist) {
 
-    // Check for empty command
     if (arglist == NULL || arglist[0] == NULL) {
         return 0;
     }
 
     // Built-in command: exit
     if (strcmp(arglist[0], "exit") == 0) {
+
         printf("Exiting shell...\n");
         exit(0);
     }
@@ -134,12 +209,13 @@ int handle_builtin(char** arglist) {
 
         char* directory;
 
-        // If no directory is provided, go to home directory
         if (arglist[1] == NULL) {
+
             directory = getenv("HOME");
 
             if (directory == NULL) {
-                fprintf(stderr, "cd: HOME environment variable not set\n");
+                fprintf(stderr,
+                        "cd: HOME environment variable not set\n");
                 return 1;
             }
         }
@@ -147,7 +223,6 @@ int handle_builtin(char** arglist) {
             directory = arglist[1];
         }
 
-        // Change the current working directory
         if (chdir(directory) != 0) {
             perror("cd");
         }
@@ -161,10 +236,11 @@ int handle_builtin(char** arglist) {
         printf("\n");
         printf("Available built-in commands:\n");
         printf("----------------------------\n");
-        printf("exit  : Exit the shell\n");
-        printf("cd    : Change the current directory\n");
-        printf("help  : Display this help message\n");
-        printf("jobs  : Display job control status\n");
+        printf("exit    : Exit the shell\n");
+        printf("cd      : Change the current directory\n");
+        printf("help    : Display this help message\n");
+        printf("jobs    : Display job control status\n");
+        printf("history : Display command history\n");
         printf("\n");
 
         return 1;
@@ -174,6 +250,14 @@ int handle_builtin(char** arglist) {
     else if (strcmp(arglist[0], "jobs") == 0) {
 
         printf("Job control not yet implemented.\n");
+
+        return 1;
+    }
+
+    // Built-in command: history
+    else if (strcmp(arglist[0], "history") == 0) {
+
+        print_history();
 
         return 1;
     }
