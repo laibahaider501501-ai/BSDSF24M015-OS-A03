@@ -1,267 +1,320 @@
 
 #include "shell.h"
 
-// Array to store command history
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <limits.h>
+
+/* Store the last 20 commands */
 static char* history[HISTORY_SIZE];
 static int history_count = 0;
 
-
-// Add a command to history
-void add_to_history(const char* command) {
-
-    if (command == NULL || command[0] == '\0') {
+/* Add a command to history */
+void add_to_history(const char* command)
+{
+    if (command == NULL || command[0] == '\0')
+    {
         return;
     }
 
-    // Make a separate copy of the command
-    char* copy = strdup(command);
-
-    if (copy == NULL) {
-        perror("strdup failed");
-        return;
-    }
-
-    // If history is full, remove the oldest command
-    if (history_count == HISTORY_SIZE) {
-
+    /* Remove the oldest command when history is full */
+    if (history_count == HISTORY_SIZE)
+    {
         free(history[0]);
 
-        for (int i = 0; i < HISTORY_SIZE - 1; i++) {
-            history[i] = history[i + 1];
+        for (int i = 1; i < HISTORY_SIZE; i++)
+        {
+            history[i - 1] = history[i];
         }
 
         history_count--;
     }
 
-    // Store the new command
-    history[history_count] = copy;
-    history_count++;
+    history[history_count] = strdup(command);
+
+    if (history[history_count] != NULL)
+    {
+        history_count++;
+    }
 }
 
-
-// Display all stored commands
-void print_history(void) {
-
-    printf("\nCommand History:\n");
-    printf("----------------\n");
-
-    for (int i = 0; i < history_count; i++) {
+/* Display stored commands */
+void print_history(void)
+{
+    for (int i = 0; i < history_count; i++)
+    {
         printf("%d  %s\n", i + 1, history[i]);
     }
-
-    printf("\n");
 }
 
-
-// Retrieve a command using its history number
-const char* get_history_command(int number) {
-
-    if (number < 1 || number > history_count) {
+/* Retrieve a command using its history number */
+const char* get_history_command(int number)
+{
+    if (number < 1 || number > history_count)
+    {
         return NULL;
     }
 
     return history[number - 1];
 }
 
+/* Read a command from the input stream */
+char* read_cmd(char* prompt, FILE* fp)
+{
+    char* line = NULL;
+    size_t size = 0;
 
-// Read a command from the user
-char* read_cmd(char* prompt, FILE* fp) {
-
-    printf("%s", prompt);
-
-    char* cmdline = (char*) malloc(sizeof(char) * MAX_LEN);
-
-    if (cmdline == NULL) {
-        perror("malloc failed");
-        exit(1);
+    if (fp == stdin && prompt != NULL)
+    {
+        printf("%s", prompt);
+        fflush(stdout);
     }
 
-    int c, pos = 0;
-
-    while ((c = getc(fp)) != EOF) {
-
-        if (c == '\n') {
-            break;
-        }
-
-        if (pos < MAX_LEN - 1) {
-            cmdline[pos++] = c;
-        }
-    }
-
-    if (c == EOF && pos == 0) {
-        free(cmdline);
+    if (getline(&line, &size, fp) == -1)
+    {
+        free(line);
         return NULL;
     }
 
-    cmdline[pos] = '\0';
+    /* Remove trailing newline */
+    line[strcspn(line, "\n")] = '\0';
 
-    return cmdline;
+    return line;
 }
 
+/* Add a token safely to the token array */
+static int add_token(char*** tokens, int* count,
+                     int* capacity, const char* value)
+{
+    if (*count >= *capacity - 1)
+    {
+        int new_capacity = (*capacity) * 2;
 
-// Convert the command into arguments
-char** tokenize(char* cmdline) {
+        char** temp = realloc(*tokens,
+                              new_capacity * sizeof(char*));
 
-    if (cmdline == NULL || cmdline[0] == '\0' ||
-        cmdline[0] == '\n') {
-        return NULL;
+        if (temp == NULL)
+        {
+            return 0;
+        }
+
+        *tokens = temp;
+        *capacity = new_capacity;
     }
 
-    char** arglist = (char**) malloc(sizeof(char*) * (MAXARGS + 1));
+    (*tokens)[*count] = strdup(value);
 
-    if (arglist == NULL) {
-        perror("malloc failed");
-        exit(1);
-    }
-
-    for (int i = 0; i < MAXARGS + 1; i++) {
-
-        arglist[i] = (char*) malloc(sizeof(char) * ARGLEN);
-
-        if (arglist[i] == NULL) {
-            perror("malloc failed");
-
-            for (int j = 0; j < i; j++) {
-                free(arglist[j]);
-            }
-
-            free(arglist);
-            exit(1);
-        }
-
-        bzero(arglist[i], ARGLEN);
-    }
-
-    char* cp = cmdline;
-    char* start;
-    int len;
-    int argnum = 0;
-
-    while (*cp != '\0' && argnum < MAXARGS) {
-
-        while (*cp == ' ' || *cp == '\t') {
-            cp++;
-        }
-
-        if (*cp == '\0') {
-            break;
-        }
-
-        start = cp;
-        len = 0;
-
-        while (*cp != '\0' && *cp != ' ' && *cp != '\t') {
-            len++;
-            cp++;
-        }
-
-        if (len >= ARGLEN) {
-
-            printf("Error: Argument is too long.\n");
-
-            for (int i = 0; i < MAXARGS + 1; i++) {
-                free(arglist[i]);
-            }
-
-            free(arglist);
-            return NULL;
-        }
-
-        strncpy(arglist[argnum], start, len);
-        arglist[argnum][len] = '\0';
-
-        argnum++;
-    }
-
-    if (argnum == 0) {
-
-        for (int i = 0; i < MAXARGS + 1; i++) {
-            free(arglist[i]);
-        }
-
-        free(arglist);
-        return NULL;
-    }
-
-    arglist[argnum] = NULL;
-
-    return arglist;
-}
-
-
-// Handle built-in commands
-int handle_builtin(char** arglist) {
-
-    if (arglist == NULL || arglist[0] == NULL) {
+    if ((*tokens)[*count] == NULL)
+    {
         return 0;
     }
 
-    // Built-in command: exit
-    if (strcmp(arglist[0], "exit") == 0) {
+    (*count)++;
 
-        printf("Exiting shell...\n");
+    return 1;
+}
+
+/* Tokenize the command and recognize <, > and | */
+char** tokenize(char* cmdline)
+{
+    if (cmdline == NULL)
+    {
+        return NULL;
+    }
+
+    int capacity = 128;
+    int count = 0;
+
+    char** tokens = malloc(capacity * sizeof(char*));
+
+    if (tokens == NULL)
+    {
+        perror("malloc");
+        return NULL;
+    }
+
+    int i = 0;
+
+    while (cmdline[i] != '\0')
+    {
+        /* Skip spaces, tabs and newlines */
+        if (cmdline[i] == ' ' ||
+            cmdline[i] == '\t' ||
+            cmdline[i] == '\n')
+        {
+            i++;
+            continue;
+        }
+
+        /* Recognize redirection and pipe operators */
+        if (cmdline[i] == '<' ||
+            cmdline[i] == '>' ||
+            cmdline[i] == '|')
+        {
+            char operator_text[2];
+
+            operator_text[0] = cmdline[i];
+            operator_text[1] = '\0';
+
+            if (!add_token(&tokens, &count,
+                           &capacity, operator_text))
+            {
+                perror("token allocation");
+                goto error;
+            }
+
+            i++;
+        }
+        else
+        {
+            char word[1024];
+            int j = 0;
+            char quote = '\0';
+
+            while (cmdline[i] != '\0')
+            {
+                char ch = cmdline[i];
+
+                /* Start a quoted string */
+                if (quote == '\0' &&
+                    (ch == '\'' || ch == '"'))
+                {
+                    quote = ch;
+                    i++;
+                    continue;
+                }
+
+                /* End a quoted string */
+                if (quote != '\0' && ch == quote)
+                {
+                    quote = '\0';
+                    i++;
+                    continue;
+                }
+
+                /* Stop at whitespace or an operator */
+                if (quote == '\0' &&
+                    (ch == ' ' || ch == '\t' ||
+                     ch == '\n' || ch == '<' ||
+                     ch == '>' || ch == '|'))
+                {
+                    break;
+                }
+
+                if (j < (int)sizeof(word) - 1)
+                {
+                    word[j++] = ch;
+                }
+
+                i++;
+            }
+
+            if (quote != '\0')
+            {
+                fprintf(stderr, "myshell: unmatched quote\n");
+                goto error;
+            }
+
+            word[j] = '\0';
+
+            if (j > 0)
+            {
+                if (!add_token(&tokens, &count,
+                               &capacity, word))
+                {
+                    perror("token allocation");
+                    goto error;
+                }
+            }
+        }
+    }
+
+    tokens[count] = NULL;
+
+    return tokens;
+
+error:
+    for (int k = 0; k < count; k++)
+    {
+        free(tokens[k]);
+    }
+
+    free(tokens);
+
+    return NULL;
+}
+
+/* Handle shell built-in commands */
+int handle_builtin(char** arglist)
+{
+    if (arglist == NULL || arglist[0] == NULL)
+    {
+        return 0;
+    }
+
+    /* exit command */
+    if (strcmp(arglist[0], "exit") == 0)
+    {
         exit(0);
     }
 
-    // Built-in command: cd
-    else if (strcmp(arglist[0], "cd") == 0) {
+    /* cd command */
+    if (strcmp(arglist[0], "cd") == 0)
+    {
+        const char* directory;
 
-        char* directory;
-
-        if (arglist[1] == NULL) {
-
+        if (arglist[1] == NULL)
+        {
             directory = getenv("HOME");
 
-            if (directory == NULL) {
-                fprintf(stderr,
-                        "cd: HOME environment variable not set\n");
+            if (directory == NULL)
+            {
+                fprintf(stderr, "myshell: HOME not set\n");
                 return 1;
             }
         }
-        else {
+        else
+        {
             directory = arglist[1];
         }
 
-        if (chdir(directory) != 0) {
+        if (chdir(directory) != 0)
+        {
             perror("cd");
         }
 
         return 1;
     }
 
-    // Built-in command: help
-    else if (strcmp(arglist[0], "help") == 0) {
-
-        printf("\n");
-        printf("Available built-in commands:\n");
-        printf("----------------------------\n");
-        printf("exit    : Exit the shell\n");
-        printf("cd      : Change the current directory\n");
-        printf("help    : Display this help message\n");
-        printf("jobs    : Display job control status\n");
-        printf("history : Display command history\n");
-        printf("\n");
+    /* help command */
+    if (strcmp(arglist[0], "help") == 0)
+    {
+        printf("\nAvailable built-in commands:\n");
+        printf("  exit       Exit the shell\n");
+        printf("  cd         Change directory\n");
+        printf("  help       Display this help message\n");
+        printf("  jobs       Display job control status\n");
+        printf("  history    Display command history\n\n");
 
         return 1;
     }
 
-    // Built-in command: jobs
-    else if (strcmp(arglist[0], "jobs") == 0) {
-
+    /* jobs command */
+    if (strcmp(arglist[0], "jobs") == 0)
+    {
         printf("Job control not yet implemented.\n");
-
         return 1;
     }
 
-    // Built-in command: history
-    else if (strcmp(arglist[0], "history") == 0) {
-
+    /* history command */
+    if (strcmp(arglist[0], "history") == 0)
+    {
         print_history();
-
         return 1;
     }
 
-    // Not a built-in command
+    /* Not a built-in command */
     return 0;
 }
