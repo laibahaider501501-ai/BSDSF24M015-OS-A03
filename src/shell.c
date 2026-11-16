@@ -1,4 +1,3 @@
-
 #include "shell.h"
 
 #include <stdio.h>
@@ -547,6 +546,7 @@ int handle_builtin(char **arglist)
         printf("Available commands:\n");
         printf("exit, cd, help, jobs, history, set\n");
         printf("You can also use variables: NAME=value and $NAME\n");
+        printf("History shortcut: !n re-executes command number n.\n");
         return 1;
     }
 
