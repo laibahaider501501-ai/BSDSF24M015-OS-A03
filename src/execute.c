@@ -1,179 +1,144 @@
+#include "shell.h"
+
 #include <stdio.h>
 #include <stdlib.h>
-#include <unistd.h>
 #include <string.h>
+#include <unistd.h>
 #include <fcntl.h>
 #include <sys/types.h>
 #include <sys/wait.h>
-#include <errno.h>
 
-#define MAX_COMMANDS 32
-#define MAX_ARGS 128
-
-/*
- * Execute one command with optional input and output redirection.
- */
-static void execute_command(char** args)
+static void execute_command(char **args)
 {
-    char* input_file = NULL;
-    char* output_file = NULL;
+    int input_fd = -1;
+    int output_fd = -1;
 
-    char* command_args[MAX_ARGS];
-    int arg_count = 0;
+    char **clean_args = calloc(1024, sizeof(char *));
 
-    /*
-     * Separate command arguments from redirection operators.
-     */
+    if (clean_args == NULL)
+    {
+        perror("calloc");
+        exit(EXIT_FAILURE);
+    }
+
+    int count = 0;
+
+    /* Remove redirection operators and their filenames. */
+
     for (int i = 0; args[i] != NULL; i++)
     {
         if (strcmp(args[i], "<") == 0)
         {
-            if (args[i + 1] == NULL || input_file != NULL)
+            if (args[i + 1] == NULL)
             {
-                fprintf(stderr, "myshell: invalid input redirection\n");
-                _exit(EXIT_FAILURE);
+                fprintf(stderr, "Missing input filename\n");
+                exit(EXIT_FAILURE);
             }
 
-            input_file = args[++i];
+            if (input_fd != -1)
+                close(input_fd);
+
+            input_fd = open(args[++i], O_RDONLY);
+
+            if (input_fd < 0)
+            {
+                perror("open input");
+                exit(EXIT_FAILURE);
+            }
         }
         else if (strcmp(args[i], ">") == 0)
         {
-            if (args[i + 1] == NULL || output_file != NULL)
+            if (args[i + 1] == NULL)
             {
-                fprintf(stderr, "myshell: invalid output redirection\n");
-                _exit(EXIT_FAILURE);
+                fprintf(stderr, "Missing output filename\n");
+                exit(EXIT_FAILURE);
             }
 
-            output_file = args[++i];
+            if (output_fd != -1)
+                close(output_fd);
+
+            output_fd = open(args[++i],
+                             O_WRONLY | O_CREAT | O_TRUNC,
+                             0644);
+
+            if (output_fd < 0)
+            {
+                perror("open output");
+                exit(EXIT_FAILURE);
+            }
         }
         else
         {
-            if (arg_count >= MAX_ARGS - 1)
+            if (count >= 1023)
             {
-                fprintf(stderr, "myshell: too many arguments\n");
-                _exit(EXIT_FAILURE);
+                fprintf(stderr, "Too many command arguments\n");
+                exit(EXIT_FAILURE);
             }
 
-            command_args[arg_count++] = args[i];
+            clean_args[count++] = args[i];
         }
     }
 
-    command_args[arg_count] = NULL;
-
-    if (arg_count == 0)
+    if (input_fd != -1)
     {
-        fprintf(stderr, "myshell: missing command\n");
-        _exit(EXIT_FAILURE);
+        if (dup2(input_fd, STDIN_FILENO) < 0)
+        {
+            perror("dup2 input");
+            exit(EXIT_FAILURE);
+        }
+
+        close(input_fd);
     }
 
-    /*
-     * Input redirection: < filename
-     */
-    if (input_file != NULL)
+    if (output_fd != -1)
     {
-        int fd = open(input_file, O_RDONLY);
-
-        if (fd < 0)
+        if (dup2(output_fd, STDOUT_FILENO) < 0)
         {
-            perror(input_file);
-            _exit(EXIT_FAILURE);
+            perror("dup2 output");
+            exit(EXIT_FAILURE);
         }
 
-        if (dup2(fd, STDIN_FILENO) < 0)
-        {
-            perror("dup2");
-            close(fd);
-            _exit(EXIT_FAILURE);
-        }
-
-        close(fd);
+        close(output_fd);
     }
 
-    /*
-     * Output redirection: > filename
-     */
-    if (output_file != NULL)
-    {
-        int fd = open(output_file,
-                      O_WRONLY | O_CREAT | O_TRUNC,
-                      0644);
+    if (clean_args[0] == NULL)
+        exit(EXIT_SUCCESS);
 
-        if (fd < 0)
-        {
-            perror(output_file);
-            _exit(EXIT_FAILURE);
-        }
+    execvp(clean_args[0], clean_args);
 
-        if (dup2(fd, STDOUT_FILENO) < 0)
-        {
-            perror("dup2");
-            close(fd);
-            _exit(EXIT_FAILURE);
-        }
-
-        close(fd);
-    }
-
-    /*
-     * Execute the external command.
-     */
-    execvp(command_args[0], command_args);
-
-    perror(command_args[0]);
-    _exit(EXIT_FAILURE);
+    perror("Command execution failed");
+    exit(EXIT_FAILURE);
 }
 
-/*
- * Execute a pipeline containing one or more commands.
- *
- * Example:
- * cat file.txt | grep root | wc -l
- */
-static void execute_pipeline(char** args)
+static void execute_pipeline(char **args)
 {
-    char** commands[MAX_COMMANDS];
-    int command_count = 0;
+    char **commands[100];
+    int command_count = 1;
 
-    commands[command_count++] = args;
+    commands[0] = args;
 
-    /*
-     * Divide the arguments into commands using |.
-     */
+    /* Split the arguments at every pipe operator. */
+
     for (int i = 0; args[i] != NULL; i++)
     {
         if (strcmp(args[i], "|") == 0)
         {
-            args[i] = NULL;
-
-            if (args[i + 1] == NULL ||
-                command_count >= MAX_COMMANDS)
+            if (command_count >= 100 ||
+                args[i + 1] == NULL ||
+                args[i - 1] == NULL)
             {
-                fprintf(stderr, "myshell: invalid pipe\n");
+                fprintf(stderr, "Invalid pipe command\n");
                 return;
             }
 
+            args[i] = NULL;
             commands[command_count++] = &args[i + 1];
         }
     }
 
-    /*
-     * Check for empty commands.
-     */
-    for (int i = 0; i < command_count; i++)
-    {
-        if (commands[i][0] == NULL)
-        {
-            fprintf(stderr, "myshell: empty command in pipe\n");
-            return;
-        }
-    }
+    int pipes[99][2];
+    pid_t pids[100];
 
-    int pipes[MAX_COMMANDS - 1][2];
-    pid_t pids[MAX_COMMANDS];
-
-    /*
-     * Create the required pipes.
-     */
     for (int i = 0; i < command_count - 1; i++)
     {
         if (pipe(pipes[i]) < 0)
@@ -183,100 +148,86 @@ static void execute_pipeline(char** args)
         }
     }
 
-    /*
-     * Create one child process for each command.
-     */
+    int started = 0;
+
     for (int i = 0; i < command_count; i++)
     {
-        pid_t pid = fork();
+        pids[i] = fork();
 
-        if (pid < 0)
+        if (pids[i] < 0)
         {
             perror("fork");
-
-            /*
-             * Close all pipe descriptors if fork fails.
-             */
-            for (int j = 0; j < command_count - 1; j++)
-            {
-                close(pipes[j][0]);
-                close(pipes[j][1]);
-            }
-
-            return;
+            break;
         }
 
-        if (pid == 0)
+        if (pids[i] == 0)
         {
-            /*
-             * Child process.
-             *
-             * Connect the previous pipe's read end to stdin.
-             */
             if (i > 0)
             {
                 if (dup2(pipes[i - 1][0], STDIN_FILENO) < 0)
                 {
-                    perror("dup2");
-                    _exit(EXIT_FAILURE);
+                    perror("dup2 input pipe");
+                    exit(EXIT_FAILURE);
                 }
             }
 
-            /*
-             * Connect the next pipe's write end to stdout.
-             */
             if (i < command_count - 1)
             {
                 if (dup2(pipes[i][1], STDOUT_FILENO) < 0)
                 {
-                    perror("dup2");
-                    _exit(EXIT_FAILURE);
+                    perror("dup2 output pipe");
+                    exit(EXIT_FAILURE);
                 }
             }
 
-            /*
-             * Close all original pipe descriptors in the child.
-             */
             for (int j = 0; j < command_count - 1; j++)
             {
                 close(pipes[j][0]);
                 close(pipes[j][1]);
             }
 
-            /*
-             * Apply any < or > redirection and execute command.
-             */
             execute_command(commands[i]);
         }
 
-        pids[i] = pid;
+        started++;
     }
 
-    /*
-     * Parent process must close every pipe descriptor.
-     */
+    /* Close all pipe descriptors in the parent. */
+
     for (int i = 0; i < command_count - 1; i++)
     {
         close(pipes[i][0]);
         close(pipes[i][1]);
     }
 
-    /*
-     * Wait for all child processes to finish.
-     */
-    for (int i = 0; i < command_count; i++)
-    {
+    /* Wait for the processes that were successfully started. */
+
+    for (int i = 0; i < started; i++)
         waitpid(pids[i], NULL, 0);
-    }
 }
 
-/*
- * Main execution function called by main.c.
- */
-void execute(char** arglist)
+void execute(char **arglist, int background)
 {
     if (arglist == NULL || arglist[0] == NULL)
+        return;
+
+    if (background)
     {
+        pid_t pid = fork();
+
+        if (pid < 0)
+        {
+            perror("fork");
+            return;
+        }
+
+        if (pid == 0)
+        {
+            execute_pipeline(arglist);
+            exit(EXIT_SUCCESS);
+        }
+
+        add_job(pid, arglist[0]);
         return;
     }
 

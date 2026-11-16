@@ -1,34 +1,34 @@
-
 #ifndef SHELL_H
 #define SHELL_H
 
 #include <stdio.h>
-#include <string.h>
-#include <strings.h>
-#include <stdlib.h>
-#include <unistd.h>
 #include <sys/types.h>
-#include <sys/wait.h>
-#include <errno.h>
 
-// Constants
-#define MAX_LEN 512
-#define MAXARGS 10
-#define ARGLEN 30
 #define HISTORY_SIZE 20
-#define PROMPT "FCIT> "
+#define MAX_JOBS 100
 
-// Function prototypes
-char* read_cmd(char* prompt, FILE* fp);
-char** tokenize(char* cmdline);
-int execute(char** arglist);
+/* Command input and parsing */
+char *read_cmd(char *prompt, FILE *fp);
+char **tokenize(char *cmdline);
 
-// Built-in command handler
-int handle_builtin(char** arglist);
-
-// History functions
-void add_to_history(const char* command);
+/* Command history */
+void add_to_history(const char *command);
 void print_history(void);
-const char* get_history_command(int number);
+const char *get_history_command(int number);
+
+/* Built-in commands */
+int handle_builtin(char **arglist);
+
+/* Command chaining */
+char **split_commands(char *line, int *count);
+void free_commands(char **commands, int count);
+
+/* Background jobs */
+void add_job(pid_t pid, const char *command);
+void reap_background_jobs(void);
+void print_jobs(void);
+
+/* Command execution */
+void execute(char **arglist, int background);
 
 #endif
